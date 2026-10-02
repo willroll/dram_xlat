@@ -53,6 +53,10 @@ def main():
         ("light-noise",  dict(noise=0.02, sep_gap=150)),
         ("heavy-noise",  dict(noise=0.06, sep_gap=130)),
         ("tight-modes",  dict(noise=0.03, sep_gap=90)),
+        # Regression: at ~3.5sigma the exact/RANSAC null-space routes fail and
+        # the union filter drops the answer, but the genetic route still holds
+        # the whole map. The final map must track it rather than collapse.
+        ("near-overlap", dict(noise=0.03, sep_gap=60)),
         ("z3-confirm",   dict(noise=0.0,  sep_gap=150, n=20_000, use_z3=True)),
     ]
     results = []

@@ -55,6 +55,34 @@ def evaluate_basis(masks: Sequence[int],
     return BasisScore(masks, cons, sep, dim, score)
 
 
+def _same_bank_pred(masks: Sequence[int], delta: np.ndarray) -> np.ndarray:
+    """Predict 'same bank' per pair: every basis mask is invariant (even
+    parity) on the pair's difference vector."""
+    pred = np.ones(delta.size, dtype=bool)
+    for m in masks:
+        if m:
+            pred &= (genetic._parity_batch(delta, m) == 0)
+    return pred
+
+
+def balanced_accuracy(masks: Sequence[int],
+                      dconf: np.ndarray, dnon: np.ndarray) -> float:
+    """How well a basis tells same-bank (conflict) from different-bank pairs.
+
+    A too-small basis calls too many different-bank pairs same-bank (low
+    specificity); a wrong mask breaks same-bank conflict pairs (low
+    sensitivity); the empty basis calls everything same-bank (0.5). The full,
+    correct basis maximises this. Selecting on it means the final map never
+    underperforms a route that already recovered the whole thing.
+    """
+    masks = [m for m in masks if m]
+    if dconf.size == 0 or dnon.size == 0:
+        return 0.0
+    sens = float(_same_bank_pred(masks, dconf).mean())      # conflicts ARE same-bank
+    spec = float((~_same_bank_pred(masks, dnon)).mean())    # non-conflicts are not
+    return 0.5 * (sens + spec)
+
+
 # ---------------------------------------------------------------- robust NS
 
 def robust_nullspace(dconf: np.ndarray, dnon: np.ndarray, cols: Sequence[int],
@@ -197,14 +225,25 @@ def discover(timing: Timing, *, bit_lo: int = 6, bit_hi: Optional[int] = None,
         split = genetic._parity_batch(dnon_eval, m).mean() if dnon_eval.size else 0.0
         if cons >= cons_floor and split >= 0.02:
             good.append(m)
-    final = gf2.rref(gf2.span_basis(good))
-    candidates["combined"] = evaluate_basis(final, dconf_eval, dnon_eval)
+    union = gf2.rref(gf2.span_basis(good))
+    candidates["combined"] = evaluate_basis(union, dconf_eval, dnon_eval)
 
-    contributors = [name for name, bs in candidates.items()
-                    if name != "combined" and final
-                    and gf2.rank(bs.masks) == len(final)
-                    and gf2.same_span(bs.masks, final)]
-    method_name = contributors[0] if contributors else "combined"
+    # Choose the final map as the candidate that best separates same-bank from
+    # different-bank pairs (balanced accuracy), not just the union. The union
+    # filter can drop a correct function under heavy label noise (its per-mask
+    # consistency dips below the floor), but the genetic route may still hold
+    # the whole map — and it wins here instead of being discarded. Ties favour
+    # the more complete basis, then the most general route.
+    priority = {"combined": 3, "genetic": 2,
+                "robust-nullspace": 1, "exact-nullspace": 0}
+    best_name, best_key = None, None
+    for name, bs in candidates.items():
+        ba = balanced_accuracy(bs.masks, dconf_eval, dnon_eval)
+        key = (round(ba, 4), bs.dim, priority.get(name, 0))
+        if best_key is None or key > best_key:
+            best_key, best_name = key, name
+    final = candidates[best_name].masks
+    method_name = best_name
 
     z3_conf = None
     if use_z3 and final:

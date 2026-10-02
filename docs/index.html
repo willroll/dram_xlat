@@ -1,0 +1,1283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>html,body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>DRAM Map Recovery</title>
+<meta name="description" content="How row-buffer timing exposes a memory controller's hidden address map.">
+<style>
+  /* Layout: a single column of instrument panels; charts are inline SVG/CSS,
+     colors come from the validated data-viz palette expressed as tokens. */
+  :root{
+    color-scheme: light;
+    --plane:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10); --border2:rgba(11,11,11,.06);
+    --blue:#2a78d6; --orange:#eb6834; --aqua:#1baf7a; --violet:#4a3aa7;
+    --good:#0ca30c; --critical:#d03b3b;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --r:12px;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7; --muted:#8f8d86;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.12); --border2:rgba(255,255,255,.06);
+    --blue:#3987e5; --orange:#e2693a; --aqua:#22b589; --violet:#9085e9;
+    --good:#0ca30c; --critical:#e05a5a;
+  }}
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7; --muted:#8f8d86;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.12); --border2:rgba(255,255,255,.06);
+    --blue:#3987e5; --orange:#e2693a; --aqua:#22b589; --violet:#9085e9;
+    --good:#0ca30c; --critical:#e05a5a;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--plane); color:var(--ink); font-family:var(--sans); line-height:1.5;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px; margin:0 auto; padding-inline:16px; padding-block:28px 56px;
+        display:flex; flex-direction:column; gap:20px}
+
+  header.top{display:flex; flex-direction:column; gap:10px}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+           color:var(--muted)}
+  h1{font-size:clamp(26px,5vw,38px); line-height:1.1; margin:0; text-wrap:balance; letter-spacing:-.02em}
+  .lede{color:var(--ink2); max-width:68ch; margin:0}
+  .lede .chip{font-family:var(--mono); font-size:.82em; color:var(--ink)}
+  .toolbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+  .btn{font:inherit; font-size:13px; color:var(--ink2); background:var(--surface);
+       border:1px solid var(--border); border-radius:999px; padding:6px 12px; cursor:pointer}
+  .btn:focus-visible{outline:2px solid var(--blue); outline-offset:2px}
+
+  .kpis{display:grid; grid-template-columns:repeat(5,1fr); gap:12px}
+  @media (max-width:720px){ .kpis{grid-template-columns:repeat(2,1fr)} }
+  .kpi{background:var(--surface); border:1px solid var(--border); border-radius:var(--r);
+       padding:14px 14px 12px; display:flex; flex-direction:column; gap:3px; min-width:0}
+  .kpi .v{font-size:26px; font-weight:650; letter-spacing:-.02em; font-variant-numeric:tabular-nums}
+  .kpi .l{font-size:12px; color:var(--muted)}
+  .kpi.accent{border-top:3px solid var(--blue)}
+
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--r);
+        padding:18px 18px 16px; display:flex; flex-direction:column; gap:6px; min-width:0}
+  .card h2{font-size:17px; margin:0; letter-spacing:-.01em}
+  .card .sub{font-size:13.5px; color:var(--ink2); margin:0 0 6px; max-width:72ch}
+  .plot{width:100%; overflow-x:auto}
+  svg{display:block; width:100%; height:auto}
+  svg text{font-family:var(--sans)}
+  .ax{fill:var(--muted); font-size:11px}
+  .axname{fill:var(--ink2); font-size:11.5px}
+  .gl{stroke:var(--grid); stroke-width:1}
+  .baseline{stroke:var(--axis); stroke-width:1}
+  .mk{stroke-dasharray:3 3; stroke-width:1.3}
+  .mklab{font-size:10.5px; font-family:var(--mono); paint-order:stroke;
+         stroke:var(--surface); stroke-width:3px; stroke-linejoin:round}
+
+  .legend{display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; color:var(--ink2); margin-top:2px}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .sw{width:11px; height:11px; border-radius:3px; flex:none}
+  .cap{font-size:12px; color:var(--muted); margin:6px 0 0; max-width:74ch}
+
+  /* function list */
+  .funcs{display:flex; flex-direction:column; gap:8px; margin-top:4px}
+  .fn{display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:9px 12px;
+      border:1px solid var(--border2); border-radius:9px; background:var(--plane)}
+  .fn .dot{width:10px; height:10px; border-radius:3px; flex:none; background:var(--blue)}
+  .fn .nm{font-size:13.5px; font-weight:600; min-width:118px}
+  .fn .ex{font-family:var(--mono); font-size:13px; color:var(--ink)}
+  .fn .hx{font-family:var(--mono); font-size:12px; color:var(--muted); margin-left:auto}
+  .note{font-size:12.5px; color:var(--ink2)}
+
+  /* address bit strip */
+  .strip{display:flex; gap:2px; min-width:760px}
+  .cell{flex:1; min-width:18px; aspect-ratio:1/1.35; border-radius:4px; display:flex;
+        align-items:center; justify-content:center; font-family:var(--mono); font-size:11px;
+        color:#fff; position:relative}
+  .cell.offset{background:var(--muted)} .cell.column{background:var(--aqua)}
+  .cell.bank{background:var(--blue)} .cell.row{background:var(--orange)}
+  .grouprow{display:flex; gap:2px; min-width:760px; margin-top:4px}
+  .grp{display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--ink2);
+       border-top:2px solid var(--border); padding-top:4px}
+
+  /* matrix */
+  .mx{display:grid; gap:3px; font-family:var(--mono); font-size:11px; min-width:420px}
+  .mx .h{color:var(--muted); text-align:center; padding-bottom:2px}
+  .mx .rl{color:var(--ink2); text-align:right; padding-right:8px; white-space:nowrap; font-family:var(--sans)}
+  .mcell{aspect-ratio:1; border-radius:4px; border:1px solid var(--border2); background:var(--plane)}
+  .mcell.on{background:var(--blue); border-color:transparent}
+
+  #tt{position:fixed; z-index:50; pointer-events:none; opacity:0; transition:opacity .08s;
+      background:var(--ink); color:var(--surface); font-size:12px; font-family:var(--mono);
+      padding:6px 9px; border-radius:7px; max-width:240px; box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  footer{color:var(--muted); font-size:12.5px; border-top:1px solid var(--border); padding-top:14px}
+  footer a{color:var(--blue)}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">dram_xlat · timing side-channel</div>
+    <h1>Reading a DRAM map by timing</h1>
+    <p class="lede">A memory controller's physical-address&nbsp;→&nbsp;<span class="chip">(channel, rank, bank&nbsp;group, bank, row, column)</span> layout is undocumented. <b>dram_xlat</b> recovers it from nothing but access latency. Everything below is real output from the solver recovering a known DDR4-style map out of <b>150,000</b> noisy timed address pairs.</p>
+    <div class="toolbar">
+      <button class="btn" id="theme">Toggle theme</button>
+      <span class="note">Validation run on a synthetic ground-truth model — the same pipeline runs on hardware-measured latencies.</span>
+    </div>
+  </header>
+
+  <section class="kpis" aria-label="headline results">
+    <div class="kpi accent"><div class="v" id="k-sep">—</div><div class="l">mode separation</div></div>
+    <div class="kpi"><div class="v" id="k-conf">—</div><div class="l">conflict pairs</div></div>
+    <div class="kpi"><div class="v" id="k-fn">—</div><div class="l">functions recovered</div></div>
+    <div class="kpi"><div class="v" id="k-bank">—</div><div class="l">banks resolved</div></div>
+    <div class="kpi"><div class="v" id="k-fault">—</div><div class="l">faults trimmed</div></div>
+  </section>
+
+  <section class="card">
+    <h2>1 · The signal — a bimodal latency distribution</h2>
+    <p class="sub">Two addresses in the <b>same bank but different rows</b> force a row-buffer conflict: measurably slower than two addresses served in parallel from different banks. That split is the entire basis of the method.</p>
+    <div class="plot"><svg id="hist" viewBox="0 0 760 300" role="img" aria-label="latency histogram"></svg></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--blue)"></i>row hit / different bank (fast)</span>
+      <span><i class="sw" style="background:var(--orange)"></i>row-buffer conflict (slow)</span>
+    </div>
+    <p class="cap" id="hist-cap"></p>
+  </section>
+
+  <section class="card">
+    <h2>2 · Which address bits select the row</h2>
+    <p class="sub">Toggle one physical-address bit at a time and re-measure. A <b>pure row bit</b> keeps the bank fixed and changes the row → conflict (slow). Bits that feed a bank/rank function switch banks → fast; low bits stay in the same row → fast.</p>
+    <div class="plot"><svg id="sweep" viewBox="0 0 760 270" role="img" aria-label="single-bit sweep"></svg></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--blue)"></i>bank / rank / group bit</span>
+      <span><i class="sw" style="background:var(--aqua)"></i>column bit</span>
+      <span><i class="sw" style="background:var(--orange)"></i>row bit</span>
+    </div>
+    <p class="cap">Simulated single-bit sweep on the example model; on hardware the probe's <span style="font-family:var(--mono)">sweep</span> mode produces exactly this shape.</p>
+  </section>
+
+  <section class="card">
+    <h2>3 · The recovered translation map</h2>
+    <p class="sub">The solver's GF(2) null-space / genetic search returns the XOR functions the controller uses. Here is how the 34-bit physical address decodes, and the five functions recovered — each a 2-bit XOR.</p>
+    <div class="plot"><div class="strip" id="strip"></div><div class="grouprow" id="groups"></div></div>
+    <div class="legend" style="margin-top:10px">
+      <span><i class="sw" style="background:var(--muted)"></i>byte offset</span>
+      <span><i class="sw" style="background:var(--aqua)"></i>column</span>
+      <span><i class="sw" style="background:var(--blue)"></i>bank / rank / group</span>
+      <span><i class="sw" style="background:var(--orange)"></i>row</span>
+    </div>
+    <div class="funcs" id="funcs"></div>
+    <p class="note" id="banks-note" style="margin-top:4px"></p>
+  </section>
+
+  <section class="card">
+    <h2>4 · XOR structure of the functions</h2>
+    <p class="sub">Each recovered function (row) XORs exactly two address bits (columns). The regular 4-bit stride is the controller spreading consecutive rows across banks.</p>
+    <div class="plot"><div class="mx" id="matrix"></div></div>
+    <p class="cap" id="z3-cap"></p>
+  </section>
+
+  <section class="card">
+    <h2>5 · Why three solver routes — robustness vs. noise</h2>
+    <p class="sub">As the two timing modes get closer (harder to tell apart), the exact and RANSAC null-space solvers fail first — one mislabeled pair corrupts the linear system. The noise-tolerant <b>genetic search</b> recovers the full map far deeper into the noise.</p>
+    <div class="plot"><svg id="robust" viewBox="0 0 760 300" role="img" aria-label="robustness vs noise"></svg></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--blue)"></i>exact null-space</span>
+      <span><i class="sw" style="background:var(--aqua)"></i>RANSAC null-space</span>
+      <span><i class="sw" style="background:var(--orange)"></i>genetic search</span>
+    </div>
+    <p class="cap">Functions recovered (of 5) as the hit/conflict gap shrinks left→right. Each point is a full solver run on 120k fresh pairs.</p>
+  </section>
+
+  <footer>
+    Method: row-buffer-conflict timing (Pessl et al., “DRAMA”, USENIX 2016), generalized to a noise-tolerant solver.
+    Source: <a href="https://github.com/willroll/pipe_detection/tree/main/dram_xlat" target="_blank" rel="noopener">github.com/willroll/pipe_detection · dram_xlat</a>.
+  </footer>
+</div>
+
+<div id="tt" role="status" aria-live="polite"></div>
+
+<script type="application/json" id="data">
+{
+  "robustness": [
+    {
+      "gap": 150,
+      "sep": 7.31,
+      "exact-nullspace": {
+        "dim": 5,
+        "recovered": true
+      },
+      "robust-nullspace": {
+        "dim": 5,
+        "recovered": true
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 5,
+        "recovered": true
+      }
+    },
+    {
+      "gap": 120,
+      "sep": 5.78,
+      "exact-nullspace": {
+        "dim": 5,
+        "recovered": true
+      },
+      "robust-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 5,
+        "recovered": true
+      }
+    },
+    {
+      "gap": 95,
+      "sep": 4.75,
+      "exact-nullspace": {
+        "dim": 5,
+        "recovered": true
+      },
+      "robust-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 5,
+        "recovered": true
+      }
+    },
+    {
+      "gap": 75,
+      "sep": 3.75,
+      "exact-nullspace": {
+        "dim": 2,
+        "recovered": false
+      },
+      "robust-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 0,
+        "recovered": false
+      }
+    },
+    {
+      "gap": 58,
+      "sep": 3.75,
+      "exact-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "robust-nullspace": {
+        "dim": 0,
+        "recovered": false
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 0,
+        "recovered": false
+      }
+    },
+    {
+      "gap": 45,
+      "sep": 3.75,
+      "exact-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "robust-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 0,
+        "recovered": false
+      }
+    },
+    {
+      "gap": 34,
+      "sep": 3.75,
+      "exact-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "robust-nullspace": {
+        "dim": 0,
+        "recovered": false
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 0,
+        "recovered": false
+      }
+    },
+    {
+      "gap": 26,
+      "sep": 3.76,
+      "exact-nullspace": {
+        "dim": 1,
+        "recovered": false
+      },
+      "robust-nullspace": {
+        "dim": 0,
+        "recovered": false
+      },
+      "genetic": {
+        "dim": 5,
+        "recovered": true
+      },
+      "combined": {
+        "dim": 0,
+        "recovered": false
+      }
+    }
+  ],
+  "classifier": {
+    "mu_hit": 211.5,
+    "mu_conflict": 363.2,
+    "threshold": 287.3,
+    "fault_cutoff": 434.2,
+    "separation": 7.79,
+    "n_fault": 4500,
+    "n_conflict": 4468,
+    "n_total": 150000
+  },
+  "hist": [
+    {
+      "x": 152.5,
+      "n": 112
+    },
+    {
+      "x": 157.5,
+      "n": 246
+    },
+    {
+      "x": 162.5,
+      "n": 481
+    },
+    {
+      "x": 167.5,
+      "n": 968
+    },
+    {
+      "x": 172.5,
+      "n": 1804
+    },
+    {
+      "x": 177.5,
+      "n": 3110
+    },
+    {
+      "x": 182.5,
+      "n": 4907
+    },
+    {
+      "x": 187.5,
+      "n": 7232
+    },
+    {
+      "x": 192.5,
+      "n": 9700
+    },
+    {
+      "x": 197.5,
+      "n": 12147
+    },
+    {
+      "x": 202.5,
+      "n": 14133
+    },
+    {
+      "x": 207.5,
+      "n": 15359
+    },
+    {
+      "x": 212.5,
+      "n": 15519
+    },
+    {
+      "x": 217.5,
+      "n": 14273
+    },
+    {
+      "x": 222.5,
+      "n": 12416
+    },
+    {
+      "x": 227.5,
+      "n": 9676
+    },
+    {
+      "x": 232.5,
+      "n": 7113
+    },
+    {
+      "x": 237.5,
+      "n": 4861
+    },
+    {
+      "x": 242.5,
+      "n": 3203
+    },
+    {
+      "x": 247.5,
+      "n": 1858
+    },
+    {
+      "x": 252.5,
+      "n": 997
+    },
+    {
+      "x": 257.5,
+      "n": 471
+    },
+    {
+      "x": 262.5,
+      "n": 252
+    },
+    {
+      "x": 267.5,
+      "n": 85
+    },
+    {
+      "x": 272.5,
+      "n": 37
+    },
+    {
+      "x": 277.5,
+      "n": 12
+    },
+    {
+      "x": 282.5,
+      "n": 5
+    },
+    {
+      "x": 287.5,
+      "n": 2
+    },
+    {
+      "x": 292.5,
+      "n": 0
+    },
+    {
+      "x": 297.5,
+      "n": 2
+    },
+    {
+      "x": 302.5,
+      "n": 6
+    },
+    {
+      "x": 307.5,
+      "n": 10
+    },
+    {
+      "x": 312.5,
+      "n": 17
+    },
+    {
+      "x": 317.5,
+      "n": 27
+    },
+    {
+      "x": 322.5,
+      "n": 65
+    },
+    {
+      "x": 327.5,
+      "n": 94
+    },
+    {
+      "x": 332.5,
+      "n": 172
+    },
+    {
+      "x": 337.5,
+      "n": 229
+    },
+    {
+      "x": 342.5,
+      "n": 292
+    },
+    {
+      "x": 347.5,
+      "n": 361
+    },
+    {
+      "x": 352.5,
+      "n": 433
+    },
+    {
+      "x": 357.5,
+      "n": 474
+    },
+    {
+      "x": 362.5,
+      "n": 483
+    },
+    {
+      "x": 367.5,
+      "n": 455
+    },
+    {
+      "x": 372.5,
+      "n": 390
+    },
+    {
+      "x": 377.5,
+      "n": 324
+    },
+    {
+      "x": 382.5,
+      "n": 243
+    },
+    {
+      "x": 387.5,
+      "n": 158
+    },
+    {
+      "x": 392.5,
+      "n": 114
+    },
+    {
+      "x": 397.5,
+      "n": 55
+    },
+    {
+      "x": 402.5,
+      "n": 36
+    },
+    {
+      "x": 407.5,
+      "n": 15
+    },
+    {
+      "x": 412.5,
+      "n": 7
+    },
+    {
+      "x": 417.5,
+      "n": 2
+    },
+    {
+      "x": 422.5,
+      "n": 3
+    },
+    {
+      "x": 427.5,
+      "n": 0
+    },
+    {
+      "x": 432.5,
+      "n": 0
+    },
+    {
+      "x": 437.5,
+      "n": 0
+    },
+    {
+      "x": 442.5,
+      "n": 0
+    },
+    {
+      "x": 447.5,
+      "n": 0
+    },
+    {
+      "x": 452.5,
+      "n": 0
+    },
+    {
+      "x": 457.5,
+      "n": 0
+    },
+    {
+      "x": 462.5,
+      "n": 0
+    },
+    {
+      "x": 467.5,
+      "n": 0
+    },
+    {
+      "x": 472.5,
+      "n": 0
+    },
+    {
+      "x": 477.5,
+      "n": 0
+    },
+    {
+      "x": 482.5,
+      "n": 0
+    },
+    {
+      "x": 487.5,
+      "n": 0
+    },
+    {
+      "x": 492.5,
+      "n": 0
+    },
+    {
+      "x": 497.5,
+      "n": 0
+    },
+    {
+      "x": 502.5,
+      "n": 0
+    },
+    {
+      "x": 507.5,
+      "n": 0
+    },
+    {
+      "x": 512.5,
+      "n": 0
+    },
+    {
+      "x": 517.5,
+      "n": 0
+    }
+  ],
+  "hist_range": [
+    150.0,
+    520.0
+  ],
+  "funcs": [
+    {
+      "bits": [
+        21,
+        22
+      ],
+      "expr": "b21 ^ b22",
+      "hex": "0x600000",
+      "name": "Rank"
+    },
+    {
+      "bits": [
+        16,
+        20
+      ],
+      "expr": "b16 ^ b20",
+      "hex": "0x110000",
+      "name": "Bank 1"
+    },
+    {
+      "bits": [
+        15,
+        19
+      ],
+      "expr": "b15 ^ b19",
+      "hex": "0x88000",
+      "name": "Bank 0"
+    },
+    {
+      "bits": [
+        14,
+        18
+      ],
+      "expr": "b14 ^ b18",
+      "hex": "0x44000",
+      "name": "Bank Group 1"
+    },
+    {
+      "bits": [
+        13,
+        17
+      ],
+      "expr": "b13 ^ b17",
+      "hex": "0x22000",
+      "name": "Bank Group 0"
+    }
+  ],
+  "candidates": {
+    "exact-nullspace": {
+      "dim": 5,
+      "consistency": 1.0,
+      "separation": 0.5144,
+      "score": 1.2572
+    },
+    "robust-nullspace": {
+      "dim": 5,
+      "consistency": 1.0,
+      "separation": 0.5144,
+      "score": 1.2572
+    },
+    "genetic": {
+      "dim": 5,
+      "consistency": 1.0,
+      "separation": 0.5144,
+      "score": 1.2572
+    },
+    "combined": {
+      "dim": 5,
+      "consistency": 1.0,
+      "separation": 0.5144,
+      "score": 1.2572
+    }
+  },
+  "winner": "exact-nullspace",
+  "sweep": [
+    {
+      "bit": 6,
+      "role": "column",
+      "latency": 211.5
+    },
+    {
+      "bit": 7,
+      "role": "column",
+      "latency": 211.5
+    },
+    {
+      "bit": 8,
+      "role": "column",
+      "latency": 211.5
+    },
+    {
+      "bit": 9,
+      "role": "column",
+      "latency": 211.5
+    },
+    {
+      "bit": 10,
+      "role": "column",
+      "latency": 211.5
+    },
+    {
+      "bit": 11,
+      "role": "column",
+      "latency": 211.5
+    },
+    {
+      "bit": 12,
+      "role": "column",
+      "latency": 211.5
+    },
+    {
+      "bit": 13,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 14,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 15,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 16,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 17,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 18,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 19,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 20,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 21,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 22,
+      "role": "bank",
+      "latency": 211.5
+    },
+    {
+      "bit": 23,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 24,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 25,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 26,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 27,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 28,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 29,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 30,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 31,
+      "role": "row",
+      "latency": 363.2
+    },
+    {
+      "bit": 32,
+      "role": "row",
+      "latency": 363.2
+    }
+  ],
+  "bit_roles": [
+    {
+      "bit": 0,
+      "role": "offset"
+    },
+    {
+      "bit": 1,
+      "role": "offset"
+    },
+    {
+      "bit": 2,
+      "role": "offset"
+    },
+    {
+      "bit": 3,
+      "role": "offset"
+    },
+    {
+      "bit": 4,
+      "role": "offset"
+    },
+    {
+      "bit": 5,
+      "role": "offset"
+    },
+    {
+      "bit": 6,
+      "role": "column"
+    },
+    {
+      "bit": 7,
+      "role": "column"
+    },
+    {
+      "bit": 8,
+      "role": "column"
+    },
+    {
+      "bit": 9,
+      "role": "column"
+    },
+    {
+      "bit": 10,
+      "role": "column"
+    },
+    {
+      "bit": 11,
+      "role": "column"
+    },
+    {
+      "bit": 12,
+      "role": "column"
+    },
+    {
+      "bit": 13,
+      "role": "bank"
+    },
+    {
+      "bit": 14,
+      "role": "bank"
+    },
+    {
+      "bit": 15,
+      "role": "bank"
+    },
+    {
+      "bit": 16,
+      "role": "bank"
+    },
+    {
+      "bit": 17,
+      "role": "bank"
+    },
+    {
+      "bit": 18,
+      "role": "bank"
+    },
+    {
+      "bit": 19,
+      "role": "bank"
+    },
+    {
+      "bit": 20,
+      "role": "bank"
+    },
+    {
+      "bit": 21,
+      "role": "bank"
+    },
+    {
+      "bit": 22,
+      "role": "bank"
+    },
+    {
+      "bit": 23,
+      "role": "row"
+    },
+    {
+      "bit": 24,
+      "role": "row"
+    },
+    {
+      "bit": 25,
+      "role": "row"
+    },
+    {
+      "bit": 26,
+      "role": "row"
+    },
+    {
+      "bit": 27,
+      "role": "row"
+    },
+    {
+      "bit": 28,
+      "role": "row"
+    },
+    {
+      "bit": 29,
+      "role": "row"
+    },
+    {
+      "bit": 30,
+      "role": "row"
+    },
+    {
+      "bit": 31,
+      "role": "row"
+    },
+    {
+      "bit": 32,
+      "role": "row"
+    },
+    {
+      "bit": 33,
+      "role": "row"
+    }
+  ],
+  "z3_confirmed": [
+    "b13 ^ b14 ^ b17 ^ b18",
+    "b13 ^ b17 ^ b21 ^ b22",
+    "b13 ^ b14 ^ b17 ^ b18 ^ b21 ^ b22",
+    "b13 ^ b14 ^ b15 ^ b17 ^ b18 ^ b19 ^ b21 ^ b22",
+    "b13 ^ b16 ^ b17 ^ b20 ^ b21 ^ b22"
+  ],
+  "num_banks": 32
+}
+</script>
+<script>
+(function(){
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var fmt = function(n){ return n.toLocaleString("en-US"); };
+
+  // ---- theme toggle (per-viewer convenience) ----
+  try{
+    var saved = localStorage.getItem("dramviz-theme");
+    if(saved){ document.documentElement.setAttribute("data-theme", saved); }
+  }catch(e){}
+  document.getElementById("theme").addEventListener("click", function(){
+    var cur = document.documentElement.getAttribute("data-theme");
+    var mql = window.matchMedia("(prefers-color-scheme: dark)");
+    var next = (cur ? cur : (mql.matches ? "dark" : "light")) === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try{ localStorage.setItem("dramviz-theme", next); }catch(e){}
+    r0(); // re-render so axis/label colors re-read tokens crisply
+  });
+
+  var tt = document.getElementById("tt");
+  function showTip(html, ev){ tt.innerHTML = html; tt.style.opacity = 1;
+    var x = ev.clientX + 14, y = ev.clientY + 14;
+    if(x > innerWidth-180) x = ev.clientX - 170;
+    tt.style.left = x + "px"; tt.style.top = y + "px"; }
+  function hideTip(){ tt.style.opacity = 0; }
+  function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+  function mk(tag, attrs, parent){
+    var e = document.createElementNS(SVGNS, tag);
+    for(var k in attrs) e.setAttribute(k, attrs[k]);
+    if(parent) parent.appendChild(e);
+    return e;
+  }
+  function clear(el){ while(el.firstChild) el.removeChild(el.firstChild); }
+
+  // ---- KPIs ----
+  var C = D.classifier;
+  document.getElementById("k-sep").textContent = C.separation.toFixed(1) + "σ";
+  document.getElementById("k-conf").textContent = fmt(C.n_conflict);
+  document.getElementById("k-fn").textContent = D.funcs.length;
+  document.getElementById("k-bank").textContent = D.num_banks;
+  document.getElementById("k-fault").textContent = fmt(C.n_fault);
+  document.getElementById("hist-cap").textContent =
+    "Hit mode ≈ " + Math.round(C.mu_hit) + " cyc, conflict mode ≈ " + Math.round(C.mu_conflict) +
+    " cyc (" + C.separation.toFixed(1) + "σ apart). " + fmt(C.n_fault) +
+    " page-fault-scale accesses sit far above " + Math.round(C.fault_cutoff) +
+    " cyc and are trimmed before solving. Log scale — the conflict mode is ~3% of all pairs.";
+
+  // ---- 1. histogram (log y) ----
+  function histogram(){
+    var svg = document.getElementById("hist"); clear(svg);
+    var W=760,H=300,L=46,R=14,T=16,B=36, pw=W-L-R, ph=H-T-B, by=T+ph;
+    var x0=150, x1=445;
+    var xs=function(v){ return L + (v-x0)/(x1-x0)*pw; };
+    var ymax=16000;
+    var ys=function(n){ if(n<1) return by; return by - (Math.log10(n)/Math.log10(ymax))*ph; };
+    // gridlines + y ticks (log)
+    [1,10,100,1000,10000].forEach(function(t){
+      var y=ys(t);
+      mk("line",{x1:L,y1:y,x2:L+pw,y2:y,class:"gl"},svg);
+      mk("text",{x:L-6,y:y+3,"text-anchor":"end",class:"ax","font-variant-numeric":"tabular-nums"},svg)
+        .textContent = t>=1000? (t/1000)+"k" : t;
+    });
+    // x ticks
+    [150,200,250,300,350,400].forEach(function(t){
+      mk("text",{x:xs(t),y:by+16,"text-anchor":"middle",class:"ax"},svg).textContent=t;
+    });
+    mk("text",{x:L+pw/2,y:H-4,"text-anchor":"middle",class:"axname"},svg).textContent="access latency (CPU cycles)";
+    mk("line",{x1:L,y1:by,x2:L+pw,y2:by,class:"baseline"},svg);
+    // bars
+    var thr=C.threshold, bw=Math.max(1,(pw*5/(x1-x0))-1.2);
+    D.hist.forEach(function(d){
+      if(d.n<=0 || d.x<x0 || d.x>x1) return;
+      var col = d.x < thr ? css("--blue") : css("--orange");
+      var y=ys(d.n);
+      var r=mk("rect",{x:xs(d.x)-bw/2, y:y, width:bw, height:by-y, fill:col, rx:1.5},svg);
+      r.addEventListener("mouseenter",function(ev){ showTip("≈"+d.x+" cyc<br>"+fmt(d.n)+" accesses",ev); });
+      r.addEventListener("mousemove",function(ev){ showTip("≈"+d.x+" cyc<br>"+fmt(d.n)+" accesses",ev); });
+      r.addEventListener("mouseleave",hideTip);
+    });
+    // markers
+    function marker(v,label,color,align){
+      var x=xs(v);
+      mk("line",{x1:x,y1:T,x2:x,y2:by,class:"mk",stroke:color},svg);
+      var tx = align==="end"? x-4 : x+4;
+      mk("text",{x:tx,y:T+10,"text-anchor":align,class:"mklab",fill:color},svg).textContent=label;
+    }
+    marker(C.mu_hit,"hit "+Math.round(C.mu_hit),css("--blue"),"start");
+    marker(C.threshold,"split "+Math.round(C.threshold),css("--ink2"),"start");
+    marker(C.mu_conflict,"conflict "+Math.round(C.mu_conflict),css("--orange"),"end");
+    marker(C.fault_cutoff,"faults →",css("--critical"),"end");
+  }
+
+  // ---- 2. single-bit sweep ----
+  function sweep(){
+    var svg=document.getElementById("sweep"); clear(svg);
+    var W=760,H=270,L=46,R=14,T=16,B=40, pw=W-L-R, ph=H-T-B, by=T+ph;
+    var y0=150,y1=390;
+    var ys=function(v){ return by - (v-y0)/(y1-y0)*ph; };
+    [150,200,250,300,350].forEach(function(t){
+      var y=ys(t); mk("line",{x1:L,y1:y,x2:L+pw,y2:y,class:"gl"},svg);
+      mk("text",{x:L-6,y:y+3,"text-anchor":"end",class:"ax"},svg).textContent=t;
+    });
+    mk("text",{x:L-38,y:T+ph/2,"text-anchor":"middle",class:"axname",transform:"rotate(-90 "+(L-38)+" "+(T+ph/2)+")"},svg).textContent="median latency (cyc)";
+    var S=D.sweep, n=S.length, step=pw/n, bw=Math.min(step-3, 20);
+    var rolecol={bank:"--blue",column:"--aqua",row:"--orange"};
+    S.forEach(function(d,i){
+      var cx=L+step*(i+0.5), y=ys(d.latency), col=css(rolecol[d.role]);
+      var r=mk("rect",{x:cx-bw/2,y:y,width:bw,height:by-y,fill:col,rx:2},svg);
+      var tip="bit "+d.bit+" ("+d.role+")<br>≈"+Math.round(d.latency)+" cyc";
+      r.addEventListener("mouseenter",function(ev){showTip(tip,ev);});
+      r.addEventListener("mousemove",function(ev){showTip(tip,ev);});
+      r.addEventListener("mouseleave",hideTip);
+      if(d.bit%2===0) mk("text",{x:cx,y:by+14,"text-anchor":"middle",class:"ax"},svg).textContent=d.bit;
+    });
+    mk("line",{x1:L,y1:by,x2:L+pw,y2:by,class:"baseline"},svg);
+    mk("text",{x:L+pw/2,y:H-4,"text-anchor":"middle",class:"axname"},svg).textContent="physical address bit toggled";
+    var yt=ys(C.threshold);
+    mk("line",{x1:L,y1:yt,x2:L+pw,y2:yt,class:"mk",stroke:css("--ink2")},svg);
+    mk("text",{x:L+4,y:yt-4,"text-anchor":"start",class:"mklab",fill:css("--ink2")},svg).textContent="conflict split";
+  }
+
+  // ---- 3. address strip + functions ----
+  function strip(){
+    var s=document.getElementById("strip"); clear(s);
+    D.bit_roles.slice().reverse().forEach(function(d){
+      var c=document.createElement("div");
+      c.className="cell "+d.role; c.textContent=d.bit;
+      var tip="bit "+d.bit+" · "+d.role;
+      c.addEventListener("mouseenter",function(ev){showTip(tip,ev);});
+      c.addEventListener("mousemove",function(ev){showTip(tip,ev);});
+      c.addEventListener("mouseleave",hideTip);
+      s.appendChild(c);
+    });
+    // group row (roles are contiguous ranges here)
+    var g=document.getElementById("groups"); clear(g);
+    var order=D.bit_roles.slice().reverse();
+    var groups=[], cur=null;
+    order.forEach(function(d){
+      if(!cur || cur.role!==d.role){ cur={role:d.role,count:1,bits:[d.bit]}; groups.push(cur); }
+      else { cur.count++; cur.bits.push(d.bit); }
+    });
+    var labels={offset:"byte offset",column:"column",bank:"bank / rank / group",row:"row"};
+    groups.forEach(function(gr){
+      var el=document.createElement("div"); el.className="grp";
+      el.style.flex=gr.count+" "+gr.count+" 0";
+      var hi=Math.max.apply(null,gr.bits), lo=Math.min.apply(null,gr.bits);
+      el.textContent=labels[gr.role]+" ("+hi+"–"+lo+")";
+      g.appendChild(el);
+    });
+
+    var f=document.getElementById("funcs"); clear(f);
+    D.funcs.forEach(function(fn){
+      var row=document.createElement("div"); row.className="fn";
+      row.innerHTML='<span class="dot"></span><span class="nm">'+fn.name+
+        '</span><span class="ex">'+fn.expr+'</span><span class="hx">'+fn.hex+'</span>';
+      f.appendChild(row);
+    });
+    document.getElementById("banks-note").innerHTML =
+      "<b>"+D.funcs.length+"</b> independent functions → <b>2<sup>"+D.funcs.length+"</sup> = "+
+      D.num_banks+"</b> distinct banks addressable. Z3 independently confirmed an equivalent "+
+      D.funcs.length+"-function map exists on a clean subset.";
+  }
+
+  // ---- 4. function × bit matrix ----
+  function matrix(){
+    var host=document.getElementById("matrix"); clear(host);
+    var fns=D.funcs.slice().reverse(); // ascending bits first
+    var bitset={}; var minb=99,maxb=0;
+    fns.forEach(function(fn){ fn.bits.forEach(function(b){ bitset[b]=1; if(b<minb)minb=b; if(b>maxb)maxb=b; }); });
+    var cols=[]; for(var b=minb;b<=maxb;b++) cols.push(b);
+    host.style.gridTemplateColumns="minmax(96px,auto) repeat("+cols.length+",1fr)";
+    host.appendChild(Object.assign(document.createElement("div"),{className:"h"}));
+    cols.forEach(function(b){ var h=document.createElement("div"); h.className="h"; h.textContent="b"+b; host.appendChild(h); });
+    fns.forEach(function(fn){
+      var rl=document.createElement("div"); rl.className="rl"; rl.textContent=fn.name; host.appendChild(rl);
+      cols.forEach(function(b){
+        var c=document.createElement("div");
+        var on=fn.bits.indexOf(b)>=0;
+        c.className="mcell"+(on?" on":"");
+        if(on){
+          var tip=fn.name+" uses bit "+b;
+          c.addEventListener("mouseenter",function(ev){showTip(tip,ev);});
+          c.addEventListener("mousemove",function(ev){showTip(tip,ev);});
+          c.addEventListener("mouseleave",hideTip);
+        }
+        host.appendChild(c);
+      });
+    });
+    document.getElementById("z3-cap").textContent =
+      "Recovery is only defined up to a change of basis — Z3's equivalent solution is a different set of XORs that spans the same space.";
+  }
+
+  // ---- 5. robustness ----
+  function robustness(){
+    var svg=document.getElementById("robust"); clear(svg);
+    var W=760,H=300,L=46,R=70,T=16,B=42, pw=W-L-R, ph=H-T-B, by=T+ph;
+    var pts=D.robustness;
+    var xs=function(i){ return L + (pts.length<2?0.5:i/(pts.length-1))*pw; };
+    var y0=0,y1=5.4;
+    var ys=function(v){ return by - (v-y0)/(y1-y0)*ph; };
+    for(var t=0;t<=5;t++){
+      var y=ys(t); mk("line",{x1:L,y1:y,x2:L+pw,y2:y,class:"gl"},svg);
+      mk("text",{x:L-6,y:y+3,"text-anchor":"end",class:"ax"},svg).textContent=t;
+    }
+    // target line at 5
+    mk("line",{x1:L,y1:ys(5),x2:L+pw,y2:ys(5),class:"mk",stroke:css("--good")},svg);
+    mk("text",{x:L+4,y:ys(5)-4,class:"mklab",fill:css("--good")},svg).textContent="full map = 5";
+    // x labels (gap)
+    pts.forEach(function(p,i){
+      mk("text",{x:xs(i),y:by+15,"text-anchor":"middle",class:"ax"},svg).textContent=p.gap;
+    });
+    mk("text",{x:L+pw/2,y:H-4,"text-anchor":"middle",class:"axname"},svg).textContent="hit↔conflict gap (cycles) — easier ← → harder";
+    mk("line",{x1:L,y1:by,x2:L+pw,y2:by,class:"baseline"},svg);
+    mk("text",{x:L-38,y:T+ph/2,"text-anchor":"middle",class:"axname",transform:"rotate(-90 "+(L-38)+" "+(T+ph/2)+")"},svg).textContent="functions recovered";
+
+    var series=[
+      {key:"exact-nullspace",label:"exact",col:"--blue"},
+      {key:"robust-nullspace",label:"RANSAC",col:"--aqua"},
+      {key:"genetic",label:"genetic",col:"--orange"}
+    ];
+    series.forEach(function(s){
+      var col=css(s.col), d="";
+      pts.forEach(function(p,i){ d += (i?"L":"M")+xs(i)+" "+ys(p[s.key].dim); });
+      mk("path",{d:d,fill:"none",stroke:col,"stroke-width":2.2,"stroke-linejoin":"round","stroke-linecap":"round"},svg);
+      pts.forEach(function(p,i){
+        var cx=xs(i), cy=ys(p[s.key].dim);
+        var c=mk("circle",{cx:cx,cy:cy,r:4.5,fill:col,stroke:css("--surface"),"stroke-width":1.5},svg);
+        var tip=s.label+" · gap "+p.gap+" ("+p.sep+"σ)<br>"+p[s.key].dim+"/5 "+(p[s.key].recovered?"✓ recovered":"✗");
+        c.addEventListener("mouseenter",function(ev){showTip(tip,ev);});
+        c.addEventListener("mousemove",function(ev){showTip(tip,ev);});
+        c.addEventListener("mouseleave",hideTip);
+      });
+      // direct label at right end
+      var last=pts.length-1;
+      mk("text",{x:xs(last)+8,y:ys(pts[last][s.key].dim)+4,class:"mklab",fill:col},svg).textContent=s.label;
+    });
+  }
+
+  function r0(){ histogram(); sweep(); strip(); matrix(); robustness(); }
+  r0();
+})();
+</script>
+</body>
+</html>

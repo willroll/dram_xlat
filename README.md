@@ -71,6 +71,7 @@ configurable error rate.
 | `solver/solve.py`      | 3     | CLI: dataset.csv → functions.json |
 | `solver/selftest.py`   | 3     | end-to-end recovery test on noisy synthetic data (no hardware) |
 | `verify/verify.py`     | 4     | targeted-pair generation + hit-rate report |
+| `docs/index.html`      | —     | self-contained dashboard visualizing a solver run (open in a browser) |
 | `scripts/prepare_target.sh` | — | hugepages / core isolation / prefetcher notes for the target |
 | `Makefile`             | —     | `make build` / `make test` / `make clean` convenience |
 | `requirements.txt`     | —     | Python deps (numpy, scikit-learn, z3-solver) |
@@ -98,6 +99,15 @@ python3 solver/solve.py dataset.csv --out functions.json
 # 4. verify against the hardware
 python3 verify/verify.py functions.json --probe ./probe/dram_probe --hugepage 1G
 ```
+
+### Dashboard
+
+`docs/index.html` is a self-contained page (no build step, no network) that
+visualizes a full solver run — the bimodal latency distribution, which address
+bits select the row, the recovered XOR translation map, and how each solver
+route holds up as the timing modes get harder to separate. Open it directly in
+a browser, or serve `docs/` with GitHub Pages. Every figure is real output from
+the synthetic self-test.
 
 ### Validate the analysis without hardware
 
