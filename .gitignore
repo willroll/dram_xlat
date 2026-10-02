@@ -1,0 +1,15 @@
+# build artifacts
+probe/dram_probe
+probe/build/
+*.o
+
+# python
+__pycache__/
+*.pyc
+
+# acquisition / analysis outputs
+*.csv
+*.log
+functions.json
+verify_report.json
+*.manifest.json
