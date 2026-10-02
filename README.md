@@ -118,3 +118,53 @@ distribution. The probe prints a latency **histogram summary** to stderr on ever
 so you can confirm the bimodal hit/conflict separation before trusting the solver; if
 the two modes are not cleanly separated, increase `--reps`, pin to an isolated core,
 and disable prefetchers (see `scripts/prepare_target.sh`).
+
+---
+
+## Targets: Intel vs AMD
+
+The probe is x86-64 generic (`rdtscp` + `mfence`/`lfence` + `clflush`); the solver and
+verifier are architecture-agnostic (they consume the CSV). The only vendor-specific
+piece is prefetcher control, which is hardcoded for Intel and env-overridable for AMD.
+
+### Intel (incl. Xeon E5-1650 v4, Broadwell-EP) — the better-supported path
+
+- **Prefetcher disable works natively.** `--disable-prefetch` writes `MSR 0x1A4`
+  (MISC_FEATURE_CONTROL), bits `[3:0]` = L2 stream, L2 adjacent-line, L1 DCU, and
+  DCU-IP prefetchers. Correct for Nehalem through at least Skylake/Broadwell.
+- **No `clflushopt` on Broadwell** (Skylake+ only) — `timing.h` `#ifdef`-guards it and
+  falls back to `clflush`, so it just works. Build on the box with `-march=native`, or
+  cross-build with `make CFLAGS="-O2 -march=broadwell"`.
+- **Invariant TSC** (`constant_tsc`/`nonstop_tsc`): `rdtscp` counts are stable across
+  frequency changes; still fix the frequency (disable Turbo) for a clean split.
+- **Quad-channel → you also recover a *channel* hash.** Intel interleaves channels with
+  an XOR of several physical bits; the solver returns it as extra functions in the
+  basis. What you recover depends on how many DIMMs/channels you populate and the BIOS
+  interleave settings. Single socket (E5-1650 v4) keeps it to one controller's map.
+- **Use 1 GiB hugepages, reserved at boot.** Runtime 1 GiB reservation usually fails
+  from fragmentation, so add to the kernel cmdline and reboot:
+  `default_hugepagesz=1G hugepagesz=1G hugepages=8`. (2 MiB only covers bits 0–20 — too
+  low for channel/rank bits.)
+- **Ground truth exists:** DRAMA's published Intel results are from this Core/Xeon-E5
+  era, so you can sanity-check the recovered functions.
+
+Recommended run on an E5-1650 v4:
+
+```sh
+cd probe && make                               # -march=native → broadwell, clflush fallback
+sudo ../scripts/prepare_target.sh              # reserve hugepages, print isolation steps
+sudo ./dram_probe pairs --hugepage 1G --reps 64 --num-pairs 2000000 \
+     --cpu 3 --rt --disable-prefetch > dataset.csv
+python3 ../solver/solve.py dataset.csv --out functions.json
+python3 ../verify/verify.py functions.json --probe ./dram_probe --hugepage 1G
+```
+
+Not in scope: Intel's LLC **cache-slice** hash is a *different* undocumented function
+(cache, not DRAM banks) — same timing-methodology family, but this tool targets DRAM.
+
+### AMD (Zen 17h+)
+
+Same flow, except prefetcher control is model-specific. Disable prefetchers in firmware,
+or pass the register from your model's PPR:
+`DRAM_PREFETCH_MSR=0x... DRAM_PREFETCH_MASK=0x... ./dram_probe ... --disable-prefetch`.
+Disable Core Performance Boost in firmware (no `intel_pstate/no_turbo` knob).

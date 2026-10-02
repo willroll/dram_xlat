@@ -35,6 +35,11 @@ if [ -d /sys/kernel/mm/hugepages/hugepages-1048576kB ]; then
   echo "$NR_1G" > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages || true
   have1g=$(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages)
   echo "  1G hugepages reserved: $have1g (requested $NR_1G)"
+  if [ "$have1g" -lt "$NR_1G" ]; then
+    echo "  !! got fewer than requested — runtime 1G reservation often fails from"
+    echo "     fragmentation. Reserve at boot instead (kernel cmdline, then reboot):"
+    echo "       default_hugepagesz=1G hugepagesz=1G hugepages=$NR_1G"
+  fi
 else
   echo "  1G hugepages not supported by kernel; falling back to 2M"
 fi
@@ -42,11 +47,22 @@ if [ -d /sys/kernel/mm/hugepages/hugepages-2048kB ]; then
   echo "$NR_2M" > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages || true
   have2m=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages)
   echo "  2M hugepages reserved: $have2m (requested $NR_2M)"
+  echo "  note: 2M pages only cover physical bits 0..20 — too low for channel/rank"
+  echo "        bits on multi-channel parts. Prefer 1G where the functions reach higher."
 fi
 
 echo
 echo "== 2. MSR access (for optional --disable-prefetch) =="
+VENDOR=$(grep -m1 '^vendor_id' /proc/cpuinfo | awk '{print $3}')
+MODEL=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
+echo "  cpu: $MODEL ($VENDOR)"
 modprobe msr 2>/dev/null && echo "  msr module loaded" || echo "  msr module unavailable (skip prefetcher control)"
+if [ "$VENDOR" = "GenuineIntel" ]; then
+  echo "  Intel: --disable-prefetch works natively (MSR 0x1A4 bits[3:0])."
+else
+  echo "  non-Intel: set DRAM_PREFETCH_MSR/DRAM_PREFETCH_MASK from your model's PPR,"
+  echo "             or disable prefetchers in firmware."
+fi
 
 echo
 echo "== 3. Manual steps for the cleanest bimodal signal =="
