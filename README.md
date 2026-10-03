@@ -92,22 +92,40 @@ sudo ./probe/dram_probe pairs --hugepage 1G --reps 64 --num-pairs 2000000 > data
 #    (or let the orchestrator manage the sweeps:)
 #    python3 orchestrator/sweep.py --probe ./probe/dram_probe --out dataset.csv
 
-# 3. discover the functions (anywhere)
+# 3. discover the functions (anywhere) — and get a visual report of YOUR run
 pip install -r requirements.txt
-python3 solver/solve.py dataset.csv --out functions.json
+python3 solver/solve.py dataset.csv --out functions.json \
+        --report report.html --label "my-machine"
 
 # 4. verify against the hardware
 python3 verify/verify.py functions.json --probe ./probe/dram_probe --hugepage 1G
 ```
 
-### Dashboard
+### Report — graphics for your own RAM
 
-`docs/index.html` is a self-contained page (no build step, no network) that
-visualizes a full solver run — the bimodal latency distribution, which address
-bits select the row, the recovered XOR translation map, and how each solver
-route holds up as the timing modes get harder to separate. Open it directly in
-a browser, or serve `docs/` with GitHub Pages. Every figure is real output from
-the synthetic self-test.
+Pass `--report report.html` to `solve.py` and it writes a **self-contained HTML
+report of your run** (no build step, no network, no view-time dependencies) —
+open it in any browser. It shows the headline numbers, your measured bimodal
+latency distribution, how your physical address decodes (which bits select a
+bank vs. row/column), the recovered XOR functions and their structure, and
+whether the three independent solver routes agree (a confidence check). Add a
+single-bit row sweep panel by also collecting one:
+
+```sh
+sudo ./probe/dram_probe sweep --hugepage 1G --reps 64 > sweep.csv
+python3 solver/solve.py dataset.csv --report report.html --sweep sweep.csv
+```
+
+Unlike the demo below, the report carries no ground-truth labels: on real
+hardware you recover the bank-selecting XOR functions, but naming them (rank vs
+bank group) needs correlating with your DIMM topology.
+
+### Dashboard (synthetic demo)
+
+`docs/index.html` is a self-contained page that visualizes a solver run on a
+*known* synthetic map — the same panels as the report, plus a robustness sweep
+showing how each solver route holds up as the timing modes get harder to
+separate. Open it directly in a browser, or serve `docs/` with GitHub Pages.
 
 ### Validate the analysis without hardware
 
