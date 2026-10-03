@@ -28,6 +28,13 @@ def main():
     ap.add_argument("--no-genetic", action="store_true")
     ap.add_argument("--z3", action="store_true",
                     help="formally confirm with Z3 on a high-confidence subset")
+    ap.add_argument("--report", default=None,
+                    help="write a self-contained HTML report to this path")
+    ap.add_argument("--sweep", default=None,
+                    help="optional sweep CSV (from `dram_probe sweep`) to add a "
+                         "single-bit row-sweep panel to the report")
+    ap.add_argument("--label", default=None,
+                    help="label for the report header (e.g. the machine name)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -65,6 +72,15 @@ def main():
         print(f"[+] Z3 confirmed a consistent {len(res.z3_confirmed)}-function "
               f"map exists on the clean subset.", file=sys.stderr)
 
+    if args.report:
+        from dramxlat import report_html
+        sweep_timing = dataio.load_csv(args.sweep) if args.sweep else None
+        report_html.write_report(args.report, timing, res,
+                                 sweep_timing=sweep_timing,
+                                 label=args.label, dataset=args.dataset)
+        print(f"\n[+] wrote HTML report -> {args.report} (open it in a browser)",
+              file=sys.stderr)
+
     payload = res.to_dict()
     if args.out:
         with open(args.out, "w") as f:
@@ -72,7 +88,7 @@ def main():
         print(f"\n[+] wrote {args.out}", file=sys.stderr)
         print(f"[+] next: python3 verify/verify.py {args.out} "
               f"--probe ./probe/dram_probe", file=sys.stderr)
-    else:
+    elif not args.report:
         json.dump(payload, sys.stdout, indent=2)
         print()
 

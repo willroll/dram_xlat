@@ -12,6 +12,7 @@ pipeline  end-to-end: dataset -> candidate bank/rank XOR functions.
 report    pretty-printing of masks as bit lists.
 """
 from . import gf2, classify, genetic, symbolic, synthetic, report, pipeline  # noqa: F401
+from . import report_html  # noqa: F401
 
 __all__ = ["gf2", "classify", "genetic", "symbolic", "synthetic",
-           "report", "pipeline"]
+           "report", "report_html", "pipeline"]

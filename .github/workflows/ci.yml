@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build the probe
+        run: make -C probe
+
+      - name: Syntax-check Python
+        run: |
+          python -m py_compile \
+            solver/solve.py solver/selftest.py verify/verify.py \
+            orchestrator/sweep.py solver/dramxlat/*.py
+
+      - name: Solver self-test
+        run: python solver/selftest.py
+
+      - name: Report smoke test
+        run: >
+          python -c "import sys; sys.path.insert(0,'solver');
+          from dramxlat import synthetic, pipeline, report_html;
+          from dramxlat.dataio import Timing;
+          ds=synthetic.generate(synthetic.example_model(), n=40000, outlier_frac=0.03, seed=1);
+          t=Timing(ds.addr_a, ds.addr_b, ds.latency);
+          r=pipeline.discover(t, bit_lo=6, bit_hi=32, use_genetic=True, seed=1);
+          report_html.write_report('report.html', t, r, label='ci');
+          h=open('report.html').read();
+          assert h.startswith('<!doctype html>'), 'missing doctype';
+          assert len(r.functions)==5, r.functions;
+          print('report smoke OK:', len(h), 'bytes,', len(r.functions), 'functions')"
